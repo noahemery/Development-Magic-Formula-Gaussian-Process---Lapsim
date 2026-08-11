@@ -33,7 +33,14 @@ class ResidualGPConfig:
                                                     # visually, spiky, non-physical corrections instead of smooth ones.
                                                     # 0.2 (20% of a standardized std-dev) still lets a feature matter a lot
                                                     # without letting the optimizer chase sample-to-sample noise.
-    constant_value_bounds: tuple = (1e-3, 1e3)
+    constant_value_bounds: tuple = (1e-3, 3.0)     # amplitude, in NORMALIZED target units (normalize_y=True standardizes
+                                                    # the residual to unit variance before fitting the kernel). A value of
+                                                    # 1.0 already means "the GP explains 100% of the target's total
+                                                    # variance" -- the original (1e-3, 1e3) ceiling was never physically
+                                                    # meaningful and let one spec's amplitude pin at 1000 (implied signal
+                                                    # std ~26,500 N in real units -- 10x the tire's whole force range).
+                                                    # Combined with a collapsed length-scale, that's what produced the
+                                                    # spiky, non-physical corrections. 3.0 still leaves real headroom.
     noise_level_init: float = 1.0
     noise_level_bounds: tuple = (1e-5, 1e1)       # WhiteKernel models the real noise floor
     n_restarts_optimizer: int = 5
@@ -54,6 +61,7 @@ class ResidualGP:
         self.config = config or ResidualGPConfig()
         self.scaler_ = None
         self.gpr_ = None
+        self.std_scale = 1.0   # post-hoc calibration multiplier, see calibrate_std_scale() below
 
     def fit(self, X_raw: np.ndarray, residual: np.ndarray) -> "ResidualGP":
         cfg = self.config
@@ -77,7 +85,42 @@ class ResidualGP:
 
     def predict(self, X_raw: np.ndarray, return_std: bool = True):
         X = self.scaler_.transform(np.atleast_2d(X_raw))
-        return self.gpr_.predict(X, return_std=return_std)
+        if not return_std:
+            return self.gpr_.predict(X, return_std=False)
+        mean, std = self.gpr_.predict(X, return_std=True)
+        return mean, std * self.std_scale
+
+
+def calibrate_std_scale(X: np.ndarray, residual: np.ndarray, segment_id: np.ndarray,
+                         config: ResidualGPConfig = None, n_splits: int = 3) -> float:
+    """Post-hoc uncertainty calibration: fits GPs on GroupKFold training
+    folds, collects held-out z-scores z = (residual - gp_mean) / gp_std
+    (BEFORE any std_scale is applied), and returns scale = sqrt(mean(z^2)).
+
+    Why this is needed at all: WhiteKernel models i.i.d. per-point noise,
+    but GroupKFold holds out entire segments -- a whole segment can carry a
+    systematic offset (rig drift, run-to-run variation) that F_z/slip/IA
+    don't explain. That's real epistemic uncertainty a point-noise model
+    structurally can't represent, so predicted std can be too small even
+    when point predictions themselves are good. If z-scores have variance
+    close to 1, the band is already well-calibrated (scale ~= 1). If
+    variance is e.g. 4, actual errors are 2x the reported std, and scale
+    ~= 2 corrects for it on average.
+    """
+    from sklearn.model_selection import GroupKFold
+
+    n_groups = len(np.unique(segment_id))
+    if n_groups < 3:
+        return 1.0  # not enough segments to estimate this meaningfully; don't invent a correction
+
+    gkf = GroupKFold(n_splits=min(n_splits, n_groups))
+    z_scores = []
+    for train_idx, val_idx in gkf.split(X, residual, groups=segment_id):
+        gp = ResidualGP(config).fit(X[train_idx], residual[train_idx])
+        gp_mean, gp_std = gp.gpr_.predict(gp.scaler_.transform(X[val_idx]), return_std=True)  # raw, unscaled std
+        z_scores.append((residual[val_idx] - gp_mean) / gp_std)
+
+    return float(np.sqrt(np.mean(np.concatenate(z_scores) ** 2)))
 
     @property
     def fitted_length_scales_(self):

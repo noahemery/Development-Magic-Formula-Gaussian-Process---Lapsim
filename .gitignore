@@ -1,0 +1,25 @@
+# Raw TTC tire data -- large (~800MB) and typically licensed to the team for
+# internal use, not for public redistribution. Regenerate models locally
+# against your own copy via `python fit_all.py`.
+data/
+
+# Fitted model artifacts -- regenerable via fit_all.py. tire_models.joblib in
+# particular exceeds GitHub's 100MB single-file limit (exact GPs store their
+# full training covariance matrix). mf_fits.joblib also embeds raw segmented
+# case data derived from data/, so it carries the same distribution concern.
+models/
+
+# Verification plots -- regenerable via `python fit_all.py --plot` or
+# `python -m scripts.plot_verification`.
+plots/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Editor/OS cruft
+.vscode/
+.DS_Store

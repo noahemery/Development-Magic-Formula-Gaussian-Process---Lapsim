@@ -90,6 +90,14 @@ class ResidualGP:
         mean, std = self.gpr_.predict(X, return_std=True)
         return mean, std * self.std_scale
 
+    @property
+    def fitted_length_scales_(self):
+        """Fitted length-scales in standardized feature space, order
+        [F_z, slip, IA]. A length-scale that's blown up relative to the
+        others means the GP decided that feature doesn't matter -- worth
+        checking, not assuming away."""
+        return self.gpr_.kernel_.k1.k2.length_scale
+
 
 def calibrate_std_scale(X: np.ndarray, residual: np.ndarray, segment_id: np.ndarray,
                          config: ResidualGPConfig = None, n_splits: int = 3) -> float:

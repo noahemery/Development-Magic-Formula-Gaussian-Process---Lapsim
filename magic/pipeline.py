@@ -105,10 +105,13 @@ def _fit_tire_spec(spec: TireSpecConfig, first_pass_fn, second_pass_fn) -> TireF
     p_x0 = list(spec.p_x0_template)
     p_x0[spec.p_x0_c_index] = bcde_params[:, 1].mean()
 
-    fit_func = lambda x: second_pass_fn(cases, F_z0, spec.lambda_mu, bcde_params, x)
-    lsq_kwargs = dict(jac='3-point', method='lm', **_LSQ_TOL_KWARGS)
-    if spec.x_scale_jac:
-        lsq_kwargs['x_scale'] = 'jac'
+    # x_scale='jac' unconditionally: verified against the installed scipy source
+    # (check_x_scale in scipy/optimize/_lsq/least_squares.py) that x_scale=None
+    # already resolves to 'jac' whenever method='lm' -- which is every spec here.
+    # spec.x_scale_jac (config.py) has therefore been a no-op the whole time;
+    # this makes the actual behavior explicit instead of relying on an
+    # undocumented, scipy-version-dependent default.
+    lsq_kwargs = dict(jac='3-point', method='lm', x_scale='jac', **_LSQ_TOL_KWARGS)
     result = least_squares(fit_func, p_x0, **lsq_kwargs)
 
     return TireFitResult(
@@ -124,3 +127,25 @@ def _fit_tire_spec(spec: TireSpecConfig, first_pass_fn, second_pass_fn) -> TireF
 
 fit_tire_spec_lateral = partial(_fit_tire_spec, first_pass_fn=first_pass_y, second_pass_fn=second_pass_y)
 fit_tire_spec_longitudinal = partial(_fit_tire_spec, first_pass_fn=first_pass_x, second_pass_fn=second_pass_x)
+
+
+def refit_second_pass(fit_result: TireFitResult, second_pass_fn, p_x0=None, x_scale='jac'):
+    """Re-run ONLY the second-pass P-parameter fit, reusing fit_result's
+    already-computed cases/bcde_params/F_z0/lambda_mu -- skips the expensive
+    per-segment first pass entirely (~29s/spec instead of the full fit).
+
+    Returns the full scipy OptimizeResult (.x, .jac, .fun, .cost, ...)
+    instead of just .x -- _fit_tire_spec above discards everything but
+    result.x, but parameter-uncertainty work needs the Jacobian at the
+    solution.
+
+    Warm-starts from fit_result.p_params by default (not the generic
+    p_x0_template): we want the Jacobian evaluated AT the already-reported
+    solution, not wherever a fresh optimization happens to land -- some
+    specs are known ill-conditioned enough for that to matter (see
+    DECISIONS.md).
+    """
+    if p_x0 is None:
+        p_x0 = fit_result.p_params
+    fit_func = lambda x: second_pass_fn(fit_result.cases, fit_result.F_z0, fit_result.lambda_mu, fit_result.bcde_params, x)
+    return least_squares(fit_func, p_x0, jac='3-point', method='lm', x_scale=x_scale, **_LSQ_TOL_KWARGS)

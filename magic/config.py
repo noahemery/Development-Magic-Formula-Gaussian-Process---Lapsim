@@ -13,13 +13,18 @@ Two things worth flagging rather than silently "fixing" while porting this:
 1. `fz0_files` is NOT always the same as the files that get segmented into
    cases -- e.g. 160X75_R20_80's F_z0 is averaged from raw7/raw8/raw9, but
    only raw8 is actually segmented into fitted cases. Preserved as-is.
-2. `x_scale_jac` differs between specs: only 160X75_R20_70 (lateral) has
-   `x_scale="jac"` active in its second-pass least_squares call; every other
-   spec has it commented out in the original script. That looks like a
-   leftover from tuning one spec rather than a deliberate per-spec choice,
-   but since it wasn't part of the agreed bug list, it's preserved exactly
-   as found rather than unified -- flag for the team to decide whether to
-   keep it or make it consistent.
+2. `x_scale_jac` (below) turned out to be a no-op, not a real inconsistency.
+   Originally: only 160X75_R20_70 (lateral) had `x_scale="jac"` active in
+   its second-pass least_squares call, every other spec had it commented
+   out. That looked like a leftover from tuning one spec. Verified against
+   the installed scipy source (`check_x_scale` in
+   scipy/optimize/_lsq/least_squares.py): `x_scale=None` already resolves
+   to `'jac'` whenever `method='lm'`, which is every spec's second-pass
+   call -- so all 6 specs were always fitting with `x_scale='jac'`
+   regardless of this flag. `magic/pipeline.py` now sets `x_scale='jac'`
+   unconditionally to make that explicit. This field is kept on
+   `TireSpecConfig` for backward compatibility only; it's no longer read
+   anywhere and is safe to remove.
 """
 
 from dataclasses import dataclass, field

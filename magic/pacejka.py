@@ -28,6 +28,20 @@ formulas are written down.
 import numpy as np
 from scipy.optimize import least_squares
 
+# Named, in exact unpack order -- single source of truth for anything that
+# needs to label the raw x[i] entries in second_pass_y/x's solution vector
+# (e.g. parameter-uncertainty reporting). Lateral has 20 named params;
+# p_x0_template carries a 21st, unused spare slot (x[20]) -- see
+# _y_model_terms's docstring -- deliberately NOT included here.
+LATERAL_PARAM_NAMES = (
+    "PDY1", "PDY2", "PDY3", "PCY1", "PKY1", "PKY2", "PKY3", "PKY4", "PKY5",
+    "PHY1", "PHY2", "PEY1", "PEY2", "PEY3", "PEY4", "PEY5", "PVY1", "PVY2", "PVY3", "PVY4",
+)
+LONGITUDINAL_PARAM_NAMES = (
+    "PDX1", "PDX2", "PCX1", "PKX1", "PKX2", "PKX3", "PHX1", "PHX2",
+    "PEX1", "PEX2", "PEX3", "PEX4", "PVX1", "PVX2",
+)
+
 
 def _magic_formula_curve(x_slip, terms):
     B, C, D, E, S_h, S_v = terms["B"], terms["C"], terms["D"], terms["E"], terms["S_h"], terms["S_v"]

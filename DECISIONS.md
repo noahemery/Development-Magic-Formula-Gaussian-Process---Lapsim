@@ -105,9 +105,34 @@ Found while wiring up prediction: raw `FZ` is negative under load, and every use
 6. Reproduced the plot that was commented out at the bottom of the original `magic.py`: raw scatter, MF-only curve, MF+GP corrected curve, `mean ± 2*std` band, with the correct sign convention (`F_y = -data["FY"]`, `F_z = -data["FZ"]`). One per tire spec in `plots/`.
 7. Added `scikit-learn`/`joblib` to `requirements.txt`.
 
+## Parameter-level uncertainty on the P-parameters (in response to William's request)
+
+William asked for a probability distribution over the fitted P-parameters themselves — different from the GP, which gives uncertainty on the *predicted force*, not on the parameters. Added `magic/param_uncertainty.py` (`param_covariance`) + `scripts/param_uncertainty.py`: computes the standard asymptotic covariance for nonlinear least squares, `cov ≈ residual_variance * pinv(J^T J)` at the fitted solution (same formula `scipy.optimize.curve_fit` uses internally). Cheap — reuses `magic/pipeline.py`'s new `refit_second_pass()` to rerun only the second-pass fit (~30s/spec, skips the expensive first pass), no GP involved. Uses `pinv`, not `inv`, since some specs are known singular/ill-conditioned — degrades gracefully (large/NaN std) instead of crashing.
+
+**Correction to an earlier finding**: while implementing this, verified directly against the installed scipy 1.18.0 source (`check_x_scale` in `scipy/optimize/_lsq/least_squares.py`) that `x_scale=None` already resolves to `x_scale='jac'` whenever `method='lm'` — which every tire spec's second-pass fit uses. **The `x_scale_jac` per-spec inconsistency flagged earlier was a no-op, not a real inconsistency** — all 6 specs were always fitting with `x_scale='jac'` regardless of the flag. `magic/pipeline.py` now sets it unconditionally to make actual behavior explicit; `TireSpecConfig.x_scale_jac` is kept for backward compatibility only, no longer read.
+
+This is a **linearized approximation** (assumes the residual surface is locally quadratic near the solution) — cheap, but not as trustworthy as bootstrapping (resample cases with replacement, refit repeatedly, look at the empirical spread) would be. Bootstrap is deferred, not done: measured cost is ~29s per single second-pass-only refit, so a reasonable 200-replicate bootstrap is ~9.5 hours across all 6 specs, or ~3.2 hours for just the 2 lateral specs — real compute, out of scope for a same-day pass.
+
+**Two real, distinct reasons some specs come out singular/ill-conditioned, both handled explicitly rather than treated as a fitting failure**:
+1. **Mechanical**: lateral's second-pass fit has a documented spare, unused 21st parameter (`x[20]`) — its Jacobian column is exactly zero by construction, which alone makes `J^T J` rank-deficient for both lateral specs. Dropped before computing (`drop_cols`), recorded in `ParamUncertainty.dropped_param_names`, never silently discarded.
+2. **Physical, genuine non-identifiability** — see next section.
+
+**Actual results, run against all 6 specs** (`models/param_uncertainty.joblib`) — a clean, consistent, generalizable pattern, not spec-specific noise:
+
+| Spec | Rank (after dropping the spare) | Poorly-identified params (relative std > 50%) |
+|---|---|---|
+| `160X75_R20_70` | 17/20 | PCY1, PKY4, PHY1, PHY2, PEY2 |
+| `160X75_R20_80` | 17/20 | PHY1, PHY2, PEY2 |
+| `205X70_R20_70` | 13/14 | PDX2, PKX3, PHX1, PHX2, PEX1, PEX2, PEX3, PEX4 |
+| `205X70_R20_80` | 13/14 | PHX1, PHX2, PEX1, PEX2, PEX3, PEX4 |
+| `180X60_R20_60` | 13/14 | PKX2, PKX3, PHX1, PHX2, PEX1, PEX2, PEX3, PEX4 |
+| `180X60_R20_70` | 13/14 | PHX1, PHX2, PEX1, PEX2, PEX3, PEX4 |
+
+The **H-family (horizontal shift) and E-family (curvature) parameters are poorly identified in every single spec, both directions** — `PHX1`/`PHX2`/`PEX1-4` in all 4 longitudinal specs, `PHY1`/`PHY2`/`PEY2` in both lateral specs. The **D/K/V-family (peak grip, stiffness, vertical shift) parameters are consistently well identified** everywhere. This is the headline finding: it's not one bad spec, it's a systematic pattern across the whole dataset — likely means the test data doesn't have enough resolution right around the zero-slip transition region (where H and E terms are actually constrained) across any of the 6 specs. Both lateral specs are also missing one more identifiable direction than that pattern alone accounts for (rank 17/20, not 18/20) — `160X75_R20_70` uniquely also has `PCY1`/`PKY4` poorly identified, consistent with its already-documented extra fragility.
+
 ## Follow-ups for the team (not resolved in this pass)
 
-- **`160X75_R20_70`'s Magic Formula second-pass fit is non-identifiable** (singular Jacobian) — likely not enough distinct camber/load combinations in this spec's data to separately pin down every camber-related P-parameter. The GP still helps a lot despite this (76.3% held-out RMSE improvement) and now reports honestly wide uncertainty because of it, but the real fix is at the MF level (regularizing the second pass, or more camber-diverse data for this spec) — raised with William directly since it may connect to which parameters are identifiable in his fuller MF version.
+- **`160X75_R20_70`'s Magic Formula second-pass fit is non-identifiable** (singular Jacobian) — likely not enough distinct camber/load combinations in this spec's data to separately pin down every camber-related P-parameter. The GP still helps a lot despite this (76.3% held-out RMSE improvement) and now reports honestly wide uncertainty because of it, but the real fix is at the MF level (regularizing the second pass, or more camber-diverse data for this spec) — raised with William directly since it may connect to which parameters are identifiable in his fuller MF version. **Further evidence from the parameter-uncertainty work**: re-running just this spec's second-pass fit, warm-started from its own already-reported solution, with otherwise identical settings, lands on a meaningfully different parameter vector (`max|Δp_params| ≈ 2e5`) while barely changing the fit cost at all — the loss surface is flat enough in some direction that the optimizer drifts a long way for near-zero cost change. This is the same fragility already documented, now confirmed a second, independent way.
 - Per the `#modelling-lapsim` discussion: `160X75_R20_70` (7" rim) is the lateral spec that matches the tire the team actually runs -- prioritize it over `160X75_R20_80` (8", substitute data) when judging real-world fit quality.
 - Repo structure is still open: William's plan is a dedicated MF-fitting repo with his code (`tire_model.py`) on `main` and contributor branches off it. Whether this `magic/` package becomes that branch, or stays a parallel exploration, needs a team decision before pushing anywhere.
 - Pressure isn't currently a regression input (only F_z, slip, camber). William's plan is to eventually fold pressure in alongside aspect ratio and rim size. The GP layer is already feature-based (`build_gp_dataset` -> `[F_z, slip, IA]`), so adding a 4th input dimension later is additive, not a rework.

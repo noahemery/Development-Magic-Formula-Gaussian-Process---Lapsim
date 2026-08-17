@@ -38,6 +38,10 @@ python -m scripts.cross_validate     # held-out MF-only vs MF+GP RMSE and uncert
 python -m scripts.plot_verification  # writes plots/ (requires models/ to already exist)
 ```
 
+## `magic1.py`
+
+**William Young's independent Magic Formula implementation, not part of this package.** Kept for reference/comparison -- see the header comment in the file itself and `DECISIONS.md` for the detailed diff against `magic.py`. `magic/combined_slip.py` is Noah's port of the combined-slip correction from this file, built on top of this repo's own longitudinal model rather than a copy of William's code.
+
 ## Layout
 
 ```

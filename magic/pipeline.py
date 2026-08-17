@@ -15,9 +15,10 @@ import numpy as np
 import scipy.io
 from scipy.optimize import least_squares
 
-from .config import TireSpecConfig, SegmentFileConfig
+from .config import TireSpecConfig, SegmentFileConfig, CombinedSlipSpecConfig, CombinedSlipSegmentConfig
 from .segmentation import sort, bound
 from .pacejka import first_pass_y, second_pass_y, first_pass_x, second_pass_x
+from .combined_slip import first_pass_gx, second_pass_gx, R_PARAM_NAMES
 
 _LSQ_TOL_KWARGS = dict(ftol=2.3e-16, xtol=2.3e-16, gtol=2.3e-16, max_nfev=int(1e8), verbose=1)
 
@@ -149,3 +150,72 @@ def refit_second_pass(fit_result: TireFitResult, second_pass_fn, p_x0=None, x_sc
         p_x0 = fit_result.p_params
     fit_func = lambda x: second_pass_fn(fit_result.cases, fit_result.F_z0, fit_result.lambda_mu, fit_result.bcde_params, x)
     return least_squares(fit_func, p_x0, jac='3-point', method='lm', x_scale=x_scale, **_LSQ_TOL_KWARGS)
+
+
+# ---------------------------------------------------------------------------
+# Combined-slip (G_x) fitting -- see magic/combined_slip.py and
+# magic/config.py's CombinedSlipSpecConfig/COMBINED_SLIP_SPECS.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CombinedSlipFitResult:
+    base_spec_name: str
+    r_params: np.ndarray          # the 7 fitted RBX*/RCX1/REX*/RHX1 params, see combined_slip.R_PARAM_NAMES
+    bces_params: np.ndarray       # per-segment B_gx/C_gx/E_gx/S_hgx, kept for diagnostics
+    cases: list
+
+
+def load_combined_slip_segments(seg_cfg: CombinedSlipSegmentConfig) -> list:
+    """Same sort()->bound() pipeline as load_segments (magic.pipeline), but
+    keeps segments WITH meaningful slip angle (mean(|SA|) > sa_threshold)
+    instead of filtering them out -- these are the combined-slip cases."""
+    raw = scipy.io.loadmat(seg_cfg.path)
+    blocks = sort(raw, load_key=seg_cfg.sort_load_key,
+                  window=seg_cfg.sort_window, threshold_factor=seg_cfg.sort_threshold_factor)
+    trimmed = bound(blocks, slip_key=seg_cfg.bound_slip_key, threshold_factor=seg_cfg.bound_threshold_factor)
+
+    cases = []
+    for seg in trimmed:
+        et_span = seg["ET"].max() - seg["ET"].min()
+        if not (seg_cfg.et_min < et_span < seg_cfg.et_max):
+            continue
+        if not (np.abs(seg["SA"]).mean() > seg_cfg.sa_threshold):
+            continue
+        cases.append(seg)
+    return cases
+
+
+def fit_combined_slip_spec(cs_spec: CombinedSlipSpecConfig, base_fit_result: TireFitResult) -> CombinedSlipFitResult:
+    """Fit the G_x combined-slip correction for one longitudinal spec,
+    layered on top of its already-fitted pure-slip model (base_fit_result,
+    from mf_fits.joblib -- NOT refit here, reused as-is).
+    """
+    cases = []
+    for seg_cfg in cs_spec.segments:
+        cases.extend(load_combined_slip_segments(seg_cfg))
+
+    F_z0 = base_fit_result.F_z0
+    long_params = base_fit_result.p_params
+    n = len(cases)
+    bces_params = np.zeros((n, 4))
+
+    for i in range(n):
+        fit_func = lambda x, seg=cases[i]: first_pass_gx(seg, x, F_z0, long_params)
+        result = least_squares(fit_func, list(cs_spec.bces_x0), jac='3-point', method='trf',
+                                bounds=(cs_spec.bces_lower, cs_spec.bces_upper),
+                                ftol=None, xtol=2.3e-16, gtol=2.3e-16, max_nfev=int(1e8), verbose=1)
+        bces_params[i] = result.x
+
+    r_x0 = list(cs_spec.r_x0_template)
+    r_x0[3] = bces_params[:, 1].mean()  # RCX1 <- mean fitted C_gx
+    r_x0[6] = bces_params[:, 3].mean()  # RHX1 <- mean fitted S_hgx
+
+    fit_func = lambda x: second_pass_gx(cases, F_z0, base_fit_result.lambda_mu, bces_params, x)
+    result = least_squares(fit_func, r_x0, jac='3-point', method='lm', x_scale='jac', **_LSQ_TOL_KWARGS)
+
+    return CombinedSlipFitResult(
+        base_spec_name=cs_spec.base_spec_name,
+        r_params=result.x,
+        bces_params=bces_params,
+        cases=cases,
+    )

@@ -162,3 +162,58 @@ LONGITUDINAL_SPECS = (
 
 
 ALL_SPECS = LATERAL_SPECS + LONGITUDINAL_SPECS
+
+
+# ---------------------------------------------------------------------------
+# Combined-slip (G_x) correction config -- see magic/combined_slip.py.
+#
+# Ported from William Young's magic1.py, which currently only fits this
+# correction for one longitudinal spec (205X70_R20_70). Kept to that same
+# scope here rather than assuming it should cover all 4 -- expanding to the
+# other 3 longitudinal specs is a deliberate follow-up, not done implicitly.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CombinedSlipSegmentConfig:
+    """Like SegmentFileConfig, but selects segments WITH meaningful slip
+    angle present (mean(|SA|) > sa_threshold) instead of filtering them
+    out -- these are the combined-slip cases the G_x correction is fit
+    against. Same raw files/sort/bound params as the base spec's pure-slip
+    segmentation; only the SA filter direction flips."""
+    path: str
+    sort_load_key: str
+    sort_window: int
+    sort_threshold_factor: float
+    bound_slip_key: str
+    bound_threshold_factor: float
+    et_min: float
+    et_max: float
+    sa_threshold: float = 0.5   # keep cases where mean(|SA|) > this
+
+
+@dataclass(frozen=True)
+class CombinedSlipSpecConfig:
+    """Which longitudinal tire spec to layer a G_x correction onto (reuses
+    that spec's already-fitted tm_long/p_params/F_z0 as the base model),
+    and which raw files/segmentation to fit the correction from."""
+    base_spec_name: str          # must match a LONGITUDINAL_SPECS entry
+    segments: tuple              # tuple[CombinedSlipSegmentConfig, ...]
+    bces_lower: tuple = (0, 0, 0.5, -0.5)
+    bces_upper: tuple = (30, 2, 1, 0.5)
+    bces_x0: tuple = (10, 1.65, 0.5, 0)
+    # x0 for the second-pass R-parameter fit; indices 3 (RCX1) and 6 (RHX1)
+    # get seeded from the first-pass BCES fit's mean C_gx/S_hgx (see
+    # magic/pipeline.py:fit_combined_slip_spec), matching how the main
+    # pipeline seeds PCY1/PCX1 from the mean fitted C.
+    r_x0_template: tuple = (5, 8, 0, 0, 0, 0, 0)
+
+
+COMBINED_SLIP_SPECS = (
+    CombinedSlipSpecConfig(
+        base_spec_name="205X70_R20_70",
+        segments=(
+            CombinedSlipSegmentConfig(f"{STRAIGHT_DIR}/B2356raw51.mat", "FZ", 100, 10, "SL", 1.0, 5, 15, sa_threshold=0.5),
+            CombinedSlipSegmentConfig(f"{STRAIGHT_DIR}/B2356raw52.mat", "FZ", 100, 10, "SL", 1.0, 5, 15, sa_threshold=0.5),
+        ),
+    ),
+)

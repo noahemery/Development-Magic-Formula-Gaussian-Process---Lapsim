@@ -143,6 +143,18 @@ The original "GP doesn't help longitudinal" decision (see the cross-validation t
 
 Essentially unchanged, within rounding noise — the decision holds up, it wasn't stale. Worth noting for anyone revisiting this later: 3 of the 4 refits still pinned a length-scale at the `0.2` floor (same red flag as `160X75_R20_70`'s lateral fit) — `205X70_R20_80` was the one clean fit (all three length-scales comfortably within bounds). That the *accuracy* conclusion held anyway suggests the length-scale symptom isn't the actual reason GP fails to help here — more likely the longitudinal MF fit is just already accurate enough that there's genuinely little residual signal to correct, independent of any GP tuning. Longitudinal ships MF-only, confirmed a second time with the current code, not just inherited from an earlier decision.
 
+**Two distinct failure modes, not one**, worth understanding separately rather than lumping together as "GP doesn't help":
+
+| Spec | Pinned dimension | `constant_value` (amplitude) | Improvement |
+|---|---|---|---|
+| `205X70_R20_70` | F_z (floor) | 0.29 | +4.9% |
+| `205X70_R20_80` | *none — clean fit* | 0.092 (very low) | -1.8% |
+| `180X60_R20_60` | slip (floor) | 0.49 | -3.8% |
+| `180X60_R20_70` | slip (floor) | 0.095 (very low) | +0.5% |
+
+- **Pinned-length-scale specs** (`205X70_R20_70`, `180X60_R20_60`, `180X60_R20_70`): same symptom as `160X75_R20_70`'s lateral fit — the GP wants extreme local sensitivity along one axis, consistent with chasing sample-to-sample noise rather than real structure.
+- **`205X70_R20_80` is the more interesting case**: it's the *only* one of the 4 with no pinning at all — every length-scale converged cleanly within bounds — and it's also the *worst* performer (-1.8%). Not a contradiction: its `constant_value` (amplitude) is small, meaning the GP itself correctly concluded there's very little real signal to explain. A well-behaved GP that honestly finds "nothing much here" will still slightly overfit its own training data by construction, and that doesn't generalize to held-out folds — hence the small negative. This isn't a broken fit; it's a *correct* fit reporting back "there's nothing to add," which is itself a useful sanity check that the GP is behaving sensibly rather than hallucinating structure.
+
 ## Follow-ups for the team (not resolved in this pass)
 
 - **`160X75_R20_70`'s Magic Formula second-pass fit is non-identifiable** (singular Jacobian) — likely not enough distinct camber/load combinations in this spec's data to separately pin down every camber-related P-parameter. The GP still helps a lot despite this (76.3% held-out RMSE improvement) and now reports honestly wide uncertainty because of it, but the real fix is at the MF level (regularizing the second pass, or more camber-diverse data for this spec) — raised with William directly since it may connect to which parameters are identifiable in his fuller MF version. **Further evidence from the parameter-uncertainty work**: re-running just this spec's second-pass fit, warm-started from its own already-reported solution, with otherwise identical settings, lands on a meaningfully different parameter vector (`max|Δp_params| ≈ 2e5`) while barely changing the fit cost at all — the loss surface is flat enough in some direction that the optimizer drifts a long way for near-zero cost change. This is the same fragility already documented, now confirmed a second, independent way.

@@ -130,6 +130,19 @@ This is a **linearized approximation** (assumes the residual surface is locally 
 
 The **H-family (horizontal shift) and E-family (curvature) parameters are poorly identified in every single spec, both directions** — `PHX1`/`PHX2`/`PEX1-4` in all 4 longitudinal specs, `PHY1`/`PHY2`/`PEY2` in both lateral specs. The **D/K/V-family (peak grip, stiffness, vertical shift) parameters are consistently well identified** everywhere. This is the headline finding: it's not one bad spec, it's a systematic pattern across the whole dataset — likely means the test data doesn't have enough resolution right around the zero-slip transition region (where H and E terms are actually constrained) across any of the 6 specs. Both lateral specs are also missing one more identifiable direction than that pattern alone accounts for (rank 17/20, not 18/20) — `160X75_R20_70` uniquely also has `PCY1`/`PKY4` poorly identified, consistent with its already-documented extra fragility.
 
+## Longitudinal GP, re-evaluated after the amplitude-bound/calibration fixes
+
+The original "GP doesn't help longitudinal" decision (see the cross-validation table earlier in this doc) was measured *before* the `constant_value_bounds` fix and the `std_scale` calibration existed — worth checking whether it was stale. Refit all 4 longitudinal specs with the current (fixed) `ResidualGPConfig` and re-ran `GroupKFold` cross-validation:
+
+| Spec | Improvement (original config) | Improvement (fixed config) |
+|---|---|---|
+| `205X70_R20_70` | +4.9% | +4.9% |
+| `205X70_R20_80` | -1.7% | -1.8% |
+| `180X60_R20_60` | -3.8% | -3.8% |
+| `180X60_R20_70` | +0.5% | +0.5% |
+
+Essentially unchanged, within rounding noise — the decision holds up, it wasn't stale. Worth noting for anyone revisiting this later: 3 of the 4 refits still pinned a length-scale at the `0.2` floor (same red flag as `160X75_R20_70`'s lateral fit) — `205X70_R20_80` was the one clean fit (all three length-scales comfortably within bounds). That the *accuracy* conclusion held anyway suggests the length-scale symptom isn't the actual reason GP fails to help here — more likely the longitudinal MF fit is just already accurate enough that there's genuinely little residual signal to correct, independent of any GP tuning. Longitudinal ships MF-only, confirmed a second time with the current code, not just inherited from an earlier decision.
+
 ## Follow-ups for the team (not resolved in this pass)
 
 - **`160X75_R20_70`'s Magic Formula second-pass fit is non-identifiable** (singular Jacobian) — likely not enough distinct camber/load combinations in this spec's data to separately pin down every camber-related P-parameter. The GP still helps a lot despite this (76.3% held-out RMSE improvement) and now reports honestly wide uncertainty because of it, but the real fix is at the MF level (regularizing the second pass, or more camber-diverse data for this spec) — raised with William directly since it may connect to which parameters are identifiable in his fuller MF version. **Further evidence from the parameter-uncertainty work**: re-running just this spec's second-pass fit, warm-started from its own already-reported solution, with otherwise identical settings, lands on a meaningfully different parameter vector (`max|Δp_params| ≈ 2e5`) while barely changing the fit cost at all — the loss surface is flat enough in some direction that the optimizer drifts a long way for near-zero cost change. This is the same fragility already documented, now confirmed a second, independent way.
